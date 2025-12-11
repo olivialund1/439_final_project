@@ -8,6 +8,57 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        /* Network graph styles */
+        .network-graph-container {
+            width: 100%;
+            height: 600px;
+            position: relative;
+            background: #ffffff;
+        }
+
+        .network-graph-container svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .network-graph-container .link {
+            stroke: #000000;
+            stroke-width: 0.7px;
+        }
+
+        .network-graph-container .node {
+            stroke: #000000;
+            stroke-width: 0.5px;
+        }
+
+        .network-graph-container #network-tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            max-width: 260px;
+            display: none;
+            z-index: 10;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            line-height: 1.35;
+        }
+
+        .network-graph-container .legend-node {
+            fill: #999999;
+            stroke: #000000;
+            stroke-width: 0.6px;
+        }
+
+        .network-graph-container .legend-label {
+            font-size: 10px;
+            fill: #333333;
+        }
+    </style>
 </head>
 <body>
     <header>
@@ -80,6 +131,272 @@
                                 var scriptElement = document.createElement('script');
                                 scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';
                                 vizElement.parentNode.insertBefore(scriptElement, vizElement);
+                            </script>
+                        </div>
+                    </div>
+
+                    <!-- Dashboard 4 - Network Graph -->
+                    <div class="dashboard-card">
+                        <h3>Amazon Products Network</h3>
+                        <div class="dashboard-embed">
+                            <div class="network-graph-container" id="network-graph-container">
+                                <div id="network-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #666;">Loading graph...</div>
+                                <svg id="network-graph"></svg>
+                                <div id="network-tooltip"></div>
+                            </div>
+                            <script type='text/javascript'>
+                                window.addEventListener('DOMContentLoaded', function() {
+                                    // Check if opened via file:// protocol
+                                    if (window.location.protocol === 'file:') {
+                                        const container = document.getElementById('network-graph-container');
+                                        const loading = document.getElementById('network-loading');
+                                        if (loading) loading.style.display = 'none';
+                                        if (container) {
+                                            container.innerHTML = '<div style="padding: 2rem; text-align: center; color: #666; line-height: 1.6;">' +
+                                                                  '<p><strong>Local Server Required</strong></p>' +
+                                                                  '<p>This visualization requires a local web server due to browser security restrictions.</p><br>' +
+                                                                  '<p><strong>To fix this:</strong></p>' +
+                                                                  '<ol style="text-align: left; display: inline-block; margin: 1rem 0;">' +
+                                                                  '<li>Open a terminal in this folder</li>' +
+                                                                  '<li>Run: <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">python -m http.server 8000</code></li>' +
+                                                                  '<li>Open <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">http://localhost:8000</code> in your browser</li>' +
+                                                                  '</ol>' +
+                                                                  '</div>';
+                                        }
+                                        return;
+                                    }
+                                    
+                                    // Small delay to ensure styles are applied
+                                    setTimeout(function() {
+                                        const container = document.getElementById('network-graph-container');
+                                        if (!container) {
+                                            console.error('Network graph container not found');
+                                            return;
+                                        }
+                                        
+                                        // Ensure container has dimensions
+                                        const rect = container.getBoundingClientRect();
+                                        let width = rect.width || container.clientWidth || 800;
+                                        let height = rect.height || container.clientHeight || 600;
+                                        
+                                        // Fallback if dimensions are still 0
+                                        if (width === 0 || height === 0) {
+                                            width = 800;
+                                            height = 600;
+                                        }
+                                        
+                                        const svg = d3.select("#network-graph");
+                                        const tooltip = d3.select("#network-tooltip");
+                                        const loading = document.getElementById('network-loading');
+
+                                        // Set explicit SVG dimensions
+                                        svg.attr("width", width).attr("height", height);
+
+                                    // Main graph group that gets zoomed/panned
+                                    const g = svg.append("g");
+
+                                    fetch("graph.json")
+                                        .then(resp => {
+                                            if (!resp.ok) {
+                                                throw new Error('Failed to load graph.json: HTTP ' + resp.status + '. Make sure you are running a local web server.');
+                                            }
+                                            return resp.json();
+                                        })
+                                        .then(data => {
+                                            if (!data || !data.nodes || !data.edges) {
+                                                throw new Error('Invalid data format in graph.json');
+                                            }
+                                            
+                                            // Hide loading indicator
+                                            if (loading) loading.style.display = 'none';
+                                            
+                                            const nodes = data.nodes;
+                                            const edges = data.edges;
+
+                                            const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+                                            // ---------- SCALES ----------
+                                            const xExtent = d3.extent(nodes, d => d.x);
+                                            const yExtent = d3.extent(nodes, d => d.y);
+
+                                            const xScale = d3.scaleLinear()
+                                                .domain(xExtent)
+                                                .range([50, width - 50]);
+
+                                            const yScale = d3.scaleLinear()
+                                                .domain(yExtent)
+                                                .range([50, height - 50]);
+
+                                            const reviewExtent = d3.extent(nodes, d => d.review_count);
+                                            const radiusScale = d3.scaleSqrt()
+                                                .domain(reviewExtent)
+                                                .range([2, 9]);
+
+                                            const ratingExtent = d3.extent(nodes, d => d.avg_rating);
+                                            const ratingToT = d3.scaleLinear()
+                                                .domain([ratingExtent[0] || 1, ratingExtent[1] || 5])
+                                                .range([0, 1])
+                                                .clamp(true);
+                                            const viridis = d3.interpolateViridis;
+
+                                            const weightExtent = d3.extent(edges, d => d.weight);
+                                            const edgeOpacity = d3.scaleLinear()
+                                                .domain(weightExtent)
+                                                .range([0.3, 0.9])
+                                                .clamp(true);
+
+                                            // ---------- DRAW EDGES ----------
+                                            const link = g.selectAll(".link")
+                                                .data(edges)
+                                                .enter()
+                                                .append("line")
+                                                .attr("class", "link")
+                                                .attr("x1", d => xScale(nodeById[d.source].x))
+                                                .attr("y1", d => yScale(nodeById[d.source].y))
+                                                .attr("x2", d => xScale(nodeById[d.target].x))
+                                                .attr("y2", d => yScale(nodeById[d.target].y))
+                                                .attr("stroke-width", d => 0.5 + Math.log1p(d.weight) * 0.4)
+                                                .attr("stroke-opacity", d => edgeOpacity(d.weight));
+
+                                            // ---------- DRAW NODES ----------
+                                            const node = g.selectAll(".node")
+                                                .data(nodes)
+                                                .enter()
+                                                .append("circle")
+                                                .attr("class", "node")
+                                                .attr("r", d => radiusScale(d.review_count))
+                                                .attr("cx", d => xScale(d.x))
+                                                .attr("cy", d => yScale(d.y))
+                                                .attr("fill", d => {
+                                                    const r = (typeof d.avg_rating === "number") ? d.avg_rating : ratingExtent[0];
+                                                    return viridis(ratingToT(r));
+                                                });
+
+                                            // ---------- TOOLTIP: NODES ----------
+                                            node.on("mousemove", (event, d) => {
+                                                tooltip
+                                                    .style("display", "block")
+                                                    .style("left", (event.pageX + 10) + "px")
+                                                    .style("top", (event.pageY + 10) + "px")
+                                                    .html(`
+                                                        <b>${d.title || "Unknown product"}</b><br/>
+                                                        <span style="opacity:0.8">ASIN:</span> ${d.asin || "n/a"}<br/>
+                                                        <span style="opacity:0.8">Reviews:</span> ${d.review_count}<br/>
+                                                        <span style="opacity:0.8">Avg rating:</span> ${
+                                                            (typeof d.avg_rating === "number")
+                                                                ? d.avg_rating.toFixed(2)
+                                                                : d.avg_rating
+                                                        }
+                                                    `);
+                                            }).on("mouseleave", () => {
+                                                tooltip.style("display", "none");
+                                            });
+
+                                            // ---------- TOOLTIP: EDGES ----------
+                                            link.on("mousemove", (event, d) => {
+                                                const s = nodeById[d.source];
+                                                const t = nodeById[d.target];
+
+                                                tooltip
+                                                    .style("display", "block")
+                                                    .style("left", (event.pageX + 10) + "px")
+                                                    .style("top", (event.pageY + 10) + "px")
+                                                    .html(`
+                                                        <b>Connection</b><br/>
+                                                        ${s.title || s.id}<br/>
+                                                        &#8646;<br/>
+                                                        ${t.title || t.id}<br/><br/>
+                                                        <span style="opacity:0.8">Shared reviewers:</span> ${d.weight}
+                                                    `);
+                                            }).on("mouseleave", () => {
+                                                tooltip.style("display", "none");
+                                            });
+
+                                            // ---------- FAKE SIZE NODES (LEGEND) ----------
+                                            const samples = [
+                                                reviewExtent[0],
+                                                Math.round((reviewExtent[0] + reviewExtent[1]) / 2),
+                                                reviewExtent[1]
+                                            ];
+
+                                            const legendOffsetX = 80;
+                                            const legendOffsetY = height - 40;
+                                            const legendSpacing = 80;
+
+                                            const legendGroup = svg.append("g")
+                                                .attr("id", "sizeLegend")
+                                                .attr("transform", `translate(${legendOffsetX}, ${legendOffsetY})`);
+
+                                            const legendCircles = legendGroup.selectAll("circle")
+                                                .data(samples)
+                                                .enter()
+                                                .append("circle")
+                                                .attr("class", "legend-node")
+                                                .attr("cx", (d, i) => i * legendSpacing)
+                                                .attr("cy", 0)
+                                                .attr("r", d => radiusScale(d));
+
+                                            legendGroup.append("text")
+                                                .attr("class", "legend-label")
+                                                .attr("x", legendSpacing)
+                                                .attr("y", -14)
+                                                .attr("text-anchor", "middle")
+                                                .text("Size scale (# of reviews)");
+
+                                            legendGroup.selectAll("text.count-label")
+                                                .data(samples)
+                                                .enter()
+                                                .append("text")
+                                                .attr("class", "legend-label count-label")
+                                                .attr("x", (d, i) => i * legendSpacing)
+                                                .attr("y", 20)
+                                                .attr("text-anchor", "middle")
+                                                .text(d => d.toLocaleString());
+
+                                            function updateLegend(k) {
+                                                legendCircles.attr("r", d => radiusScale(d) * k);
+                                            }
+
+                                            // ---------- ZOOM ----------
+                                            const zoom = d3.zoom()
+                                                .scaleExtent([0.1, 10])
+                                                .on("zoom", (event) => {
+                                                    g.attr("transform", event.transform);
+                                                    const k = event.transform.k || 1;
+                                                    updateLegend(k);
+                                                });
+
+                                            svg.call(zoom);
+                                            updateLegend(1);
+                                        })
+                                        .catch(error => {
+                                            console.error('Error loading network graph:', error);
+                                            if (loading) loading.style.display = 'none';
+                                            
+                                            let errorMsg = error.message;
+                                            let detailedHelp = '';
+                                            
+                                            if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
+                                                if (window.location.protocol === 'file:') {
+                                                    errorMsg = 'Failed to load graph.json. Please use a local web server instead.';
+                                                    detailedHelp = '<br><br><strong>To fix this:</strong><br>' +
+                                                                  '1. Open a terminal in this folder<br>' +
+                                                                  '2. Run: <code>python -m http.server 8000</code><br>' +
+                                                                  '3. Open <code>http://localhost:8000</code> in your browser';
+                                                } else {
+                                                    errorMsg = 'Failed to load graph.json. Please check that the file exists and is committed to your repository.';
+                                                    detailedHelp = '<br><br>Check the browser console (F12) for more details.';
+                                                }
+                                            }
+                                            
+                                            container.innerHTML = '<div style="padding: 2rem; text-align: center; color: #666; line-height: 1.6;">' +
+                                                                  '<p><strong>Error loading graph data:</strong></p>' +
+                                                                  '<p>' + errorMsg + '</p>' +
+                                                                  detailedHelp +
+                                                                  '</div>';
+                                        });
+                                    }, 100);
+                                });
                             </script>
                         </div>
                     </div>
