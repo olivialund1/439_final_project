@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Amazon Products Network</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    svg {
+      width: 100vw;
+      height: 100vh;
+      background: #ffffff;
+    }
+
+    .link {
+      stroke: #000000;
+      stroke-width: 0.7px;
+    }
+
+    .node {
+      stroke: #000000;  /* black outline */
+      stroke-width: 0.5px;
+    }
+
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.85);
+      color: white;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      max-width: 260px;
+      display: none;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      line-height: 1.35;
+    }
+
+    .legend-node {
+      fill: #999999;
+      stroke: #000000;
+      stroke-width: 0.6px;
+    }
+
+    .legend-label {
+      font-size: 10px;
+      fill: #333333;
+    }
+  </style>
+</head>
+<body>
+  <svg id="graph"></svg>
+  <div id="tooltip"></div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const svg = d3.select("#graph");
+    const width  = window.innerWidth;
+    const height = window.innerHeight;
+
+    const tooltip = d3.select("#tooltip");
+
+    // Main graph group that gets zoomed/panned
+    const g = svg.append("g");
+
+    fetch("graph.json")
+      .then(resp => resp.json())
+      .then(data => {
+        const nodes = data.nodes;
+        const edges = data.edges;
+
+        const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+        // ---------- SCALES ----------
+        const xExtent = d3.extent(nodes, d => d.x);
+        const yExtent = d3.extent(nodes, d => d.y);
+
+        const xScale = d3.scaleLinear()
+          .domain(xExtent)
+          .range([50, width - 50]);
+
+        const yScale = d3.scaleLinear()
+          .domain(yExtent)
+          .range([50, height - 50]);
+
+        const reviewExtent = d3.extent(nodes, d => d.review_count);
+        const radiusScale = d3.scaleSqrt()
+          .domain(reviewExtent)
+          .range([2, 9]);
+
+        const ratingExtent = d3.extent(nodes, d => d.avg_rating);
+        const ratingToT = d3.scaleLinear()
+          .domain([ratingExtent[0] || 1, ratingExtent[1] || 5])
+          .range([0, 1])
+          .clamp(true);
+        const viridis = d3.interpolateViridis;
+
+        const weightExtent = d3.extent(edges, d => d.weight);
+        const edgeOpacity = d3.scaleLinear()
+          .domain(weightExtent)
+          .range([0.3, 0.9])
+          .clamp(true);
+
+        // ---------- DRAW EDGES ----------
+        const link = g.selectAll(".link")
+          .data(edges)
+          .enter()
+          .append("line")
+          .attr("class", "link")
+          .attr("x1", d => xScale(nodeById[d.source].x))
+          .attr("y1", d => yScale(nodeById[d.source].y))
+          .attr("x2", d => xScale(nodeById[d.target].x))
+          .attr("y2", d => yScale(nodeById[d.target].y))
+          .attr("stroke-width", d => 0.5 + Math.log1p(d.weight) * 0.4)
+          .attr("stroke-opacity", d => edgeOpacity(d.weight));
+
+        // ---------- DRAW NODES ----------
+        const node = g.selectAll(".node")
+          .data(nodes)
+          .enter()
+          .append("circle")
+          .attr("class", "node")
+          .attr("r", d => radiusScale(d.review_count))
+          .attr("cx", d => xScale(d.x))
+          .attr("cy", d => yScale(d.y))
+          .attr("fill", d => {
+            const r = (typeof d.avg_rating === "number") ? d.avg_rating : ratingExtent[0];
+            return viridis(ratingToT(r));
+          });
+
+        // ---------- TOOLTIP: NODES ----------
+        node.on("mousemove", (event, d) => {
+          tooltip
+            .style("display", "block")
+            .style("left", (event.pageX + 10) + "px")
+            .style("top",  (event.pageY + 10) + "px")
+            .html(`
+              <b>${d.title || "Unknown product"}</b><br/>
+              <span style="opacity:0.8">ASIN:</span> ${d.asin || "n/a"}<br/>
+              <span style="opacity:0.8">Reviews:</span> ${d.review_count}<br/>
+              <span style="opacity:0.8">Avg rating:</span> ${
+                (typeof d.avg_rating === "number")
+                  ? d.avg_rating.toFixed(2)
+                  : d.avg_rating
+              }
+            `);
+        }).on("mouseleave", () => {
+          tooltip.style("display", "none");
+        });
+
+        // ---------- TOOLTIP: EDGES ----------
+        link.on("mousemove", (event, d) => {
+          const s = nodeById[d.source];
+          const t = nodeById[d.target];
+
+          tooltip
+            .style("display", "block")
+            .style("left", (event.pageX + 10) + "px")
+            .style("top",  (event.pageY + 10) + "px")
+            .html(`
+              <b>Connection</b><br/>
+              ${s.title || s.id}<br/>
+              &#8646;<br/>
+              ${t.title || t.id}<br/><br/>
+              <span style="opacity:0.8">Shared reviewers:</span> ${d.weight}
+            `);
+        }).on("mouseleave", () => {
+          tooltip.style("display", "none");
+        });
+
+        // ---------- FAKE SIZE NODES (LEGEND) ----------
+        // Use min / mid / max review counts
+        const samples = [
+          reviewExtent[0],
+          Math.round((reviewExtent[0] + reviewExtent[1]) / 2),
+          reviewExtent[1]
+        ];
+
+        // Fixed position at bottom-left of the screen
+        const legendOffsetX = 80;
+        const legendOffsetY = height - 40;
+        const legendSpacing = 80;   // more space between example nodes
+
+        const legendGroup = svg.append("g")
+          .attr("id", "sizeLegend")
+          .attr("transform", `translate(${legendOffsetX}, ${legendOffsetY})`);
+
+        const legendCircles = legendGroup.selectAll("circle")
+          .data(samples)
+          .enter()
+          .append("circle")
+          .attr("class", "legend-node")
+          .attr("cx", (d, i) => i * legendSpacing)
+          .attr("cy", 0)
+          .attr("r", d => radiusScale(d));  // will be updated on zoom
+
+        // Title above the middle node
+        legendGroup.append("text")
+          .attr("class", "legend-label")
+          .attr("x", legendSpacing)   // x of middle node (index 1)
+          .attr("y", -14)
+          .attr("text-anchor", "middle")
+          .text("Size scale (# of reviews)");
+
+        // Numeric labels under each node
+        legendGroup.selectAll("text.count-label")
+          .data(samples)
+          .enter()
+          .append("text")
+          .attr("class", "legend-label count-label")
+          .attr("x", (d, i) => i * legendSpacing)
+          .attr("y", 20)
+          .attr("text-anchor", "middle")
+          .text(d => d.toLocaleString());
+
+        // Function to update legend circle radii with zoom
+        function updateLegend(k) {
+          legendCircles.attr("r", d => radiusScale(d) * k);
+        }
+
+        // ---------- ZOOM ----------
+        const zoom = d3.zoom()
+          .scaleExtent([0.1, 10])
+          .on("zoom", (event) => {
+            g.attr("transform", event.transform);
+            const k = event.transform.k || 1;
+            updateLegend(k);
+          });
+
+        svg.call(zoom);
+
+        // initial legend size
+        updateLegend(1);
+      });
+  </script>
+</body>
+</html>
